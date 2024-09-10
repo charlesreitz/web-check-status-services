@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service Monitoring</title>
+    <!-- Link para Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+        }
+
+        h1 {
+            text-align: center;
+            margin-top: 20px;
+            color: #333;
+        }
+
+        .service-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr); /* Dividindo em 3 colunas */
+            gap: 15px; /* Espaçamento entre os itens */
+            width: 80%;
+            margin: 20px auto;
+        }
+
+        .service-item {
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .service-item:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        .service-item:hover {
+            background-color: #ddd;
+        }
+
+        .green {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .red {
+            background-color: #f44336;
+            color: white;
+            padding: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .description {
+            font-weight: 500;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Service Monitoring Dashboard</h1>
+    <div id="serviceTable" class="service-grid"></div>
+
+    <script>
+        // Usando window.location para determinar o protocolo correto
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = wsProtocol + '//' + window.location.host + '/ws';
+        const socket = new WebSocket(wsUrl);
+
+        // Variável para armazenar o estado anterior dos serviços
+        let previousServices = {};
+
+        // Função para renderizar ou atualizar um serviço
+        function renderOrUpdateService(service) {
+            const table = document.getElementById("serviceTable");
+            const existingRow = document.getElementById(service.Description.toLowerCase());
+
+            // Verifica se o status é válido; se não, define "red" como padrão
+            const statusClass = service.Status && (service.Status === "green" || service.Status === "red") ? service.Status : "red";
+
+            // Se a linha do serviço já existe, atualizamos o status
+            if (existingRow) {
+                const statusCell = existingRow.querySelector('.status');
+                const currentStatus = statusCell.querySelector('div').textContent === "🟢" ? "green" : "red";
+
+                // Atualiza apenas se o status mudou
+                if (currentStatus !== statusClass) {
+                    statusCell.innerHTML = "";  // Limpa o conteúdo anterior
+                    const statusDiv = document.createElement("div");
+                    statusDiv.classList.add(statusClass);
+                    statusDiv.textContent = statusClass === "green" ? "🟢" : "🔴";
+                    statusCell.appendChild(statusDiv);
+                }
+            } else {
+                // Se a linha do serviço não existe, adicionamos uma nova
+                const row = document.createElement('div');
+                row.classList.add('service-item');
+                row.id = service.Description.toLowerCase();  // Usamos o nome do serviço como ID
+
+                const descDiv = document.createElement('div');
+                descDiv.classList.add('description');
+                descDiv.textContent = service.Description;
+
+                const statusCell = document.createElement('div');
+                statusCell.classList.add('status');
+
+                const statusDiv = document.createElement("div");
+                statusDiv.classList.add(statusClass);
+                statusDiv.textContent = statusClass === "green" ? "🟢" : "🔴";
+
+                statusCell.appendChild(statusDiv);
+
+                row.appendChild(descDiv);
+                row.appendChild(statusCell);
+
+                table.appendChild(row);
+            }
+        }
+
+        // Função para processar a lista de serviços recebidos
+        function processServices(services) {
+            services.forEach(service => {
+                // Checa se o serviço atual difere do anterior, se sim, atualiza
+                if (!previousServices[service.Description] || previousServices[service.Description].Status !== service.Status) {
+                    renderOrUpdateService(service);
+                }
+                // Atualiza o estado anterior
+                previousServices[service.Description] = service;
+            });
+        }
+
+        // WebSocket onmessage: quando dados são recebidos
+        socket.onmessage = function(event) {
+            const services = JSON.parse(event.data);
+            processServices(services);
+        };
+
+        socket.onclose = function(event) {
+            console.log("WebSocket is closed now.");
+        };
+
+        socket.onerror = function(error) {
+            console.log("WebSocket error:", error);
+        };
+    </script>
+</body>
+</html>
