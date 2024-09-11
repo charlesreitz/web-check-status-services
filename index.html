@@ -18,53 +18,89 @@
             text-align: center;
             margin-top: 20px;
             color: #333;
+            font-weight: 500;
         }
 
         .service-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr); /* Dividindo em 3 colunas */
-            gap: 15px; /* Espaçamento entre os itens */
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); /* Ajusta automaticamente o número de colunas */
+            gap: 20px; /* Mais espaçamento entre os itens */
             width: 80%;
             margin: 20px auto;
         }
 
         .service-item {
             background-color: #ffffff;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra mais leve */
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .service-item:nth-child(even) {
-            background-color: #f2f2f2;
+            align-items: center; /* Alinha os itens na vertical */
+            transition: background-color 0.3s;
         }
 
         .service-item:hover {
-            background-color: #ddd;
+            background-color: #e0e0e0; /* Efeito de hover mais suave */
+        }
+
+        .service-info {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: flex-start; /* Alinhamento à esquerda */
+            margin-left: 15px; /* Margem para separar o ícone do status */
+        }
+
+        .green, .red {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 16px;
+            color: white;
         }
 
         .green {
             background-color: #4CAF50;
-            color: white;
-            padding: 8px;
-            border-radius: 50%;
-            display: inline-block;
         }
 
         .red {
             background-color: #f44336;
-            color: white;
-            padding: 8px;
-            border-radius: 50%;
-            display: inline-block;
         }
 
         .description {
             font-weight: 500;
             font-size: 16px;
+            margin-bottom: 5px;
+            color: #333; /* Cor mais escura para o texto */
+        }
+
+        .response-time {
+            font-size: 14px; /* Um pouco maior para melhor legibilidade */
+            color: #777; /* Cor mais suave */
+        }
+
+        /* Ajuste para dispositivos móveis */
+        @media (max-width: 600px) {
+            .service-grid {
+                grid-template-columns: 1fr; /* Uma coluna em telas pequenas */
+            }
+
+            .green, .red {
+                width: 24px;
+                height: 24px;
+                font-size: 14px;
+            }
+
+            .description {
+                font-size: 14px;
+            }
+
+            .response-time {
+                font-size: 12px;
+            }
         }
     </style>
 </head>
@@ -89,9 +125,10 @@
             // Verifica se o status é válido; se não, define "red" como padrão
             const statusClass = service.Status && (service.Status === "green" || service.Status === "red") ? service.Status : "red";
 
-            // Se a linha do serviço já existe, atualizamos o status
+            // Se a linha do serviço já existe, atualizamos o status e o tempo de resposta
             if (existingRow) {
                 const statusCell = existingRow.querySelector('.status');
+                const responseTimeCell = existingRow.querySelector('.response-time');
                 const currentStatus = statusCell.querySelector('div').textContent === "🟢" ? "green" : "red";
 
                 // Atualiza apenas se o status mudou
@@ -102,27 +139,35 @@
                     statusDiv.textContent = statusClass === "green" ? "🟢" : "🔴";
                     statusCell.appendChild(statusDiv);
                 }
+
+                // Atualiza o tempo de resposta
+                responseTimeCell.textContent = `Response Time: ${service.ResponseTime}`;
             } else {
                 // Se a linha do serviço não existe, adicionamos uma nova
                 const row = document.createElement('div');
                 row.classList.add('service-item');
                 row.id = service.Description.toLowerCase();  // Usamos o nome do serviço como ID
 
-                const descDiv = document.createElement('div');
-                descDiv.classList.add('description');
-                descDiv.textContent = service.Description;
-
-                const statusCell = document.createElement('div');
-                statusCell.classList.add('status');
-
                 const statusDiv = document.createElement("div");
                 statusDiv.classList.add(statusClass);
                 statusDiv.textContent = statusClass === "green" ? "🟢" : "🔴";
 
-                statusCell.appendChild(statusDiv);
+                const serviceInfoDiv = document.createElement('div');
+                serviceInfoDiv.classList.add('service-info');
 
-                row.appendChild(descDiv);
-                row.appendChild(statusCell);
+                const descDiv = document.createElement('div');
+                descDiv.classList.add('description');
+                descDiv.textContent = service.Description;
+
+                const responseTimeDiv = document.createElement('div');
+                responseTimeDiv.classList.add('response-time');
+                responseTimeDiv.textContent = `Response Time: ${service.ResponseTime}`;
+
+                serviceInfoDiv.appendChild(descDiv);
+                serviceInfoDiv.appendChild(responseTimeDiv);
+
+                row.appendChild(statusDiv);
+                row.appendChild(serviceInfoDiv);
 
                 table.appendChild(row);
             }
