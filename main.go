@@ -25,7 +25,6 @@ type Service struct {
 }
 
 var services []Service
-var previousServices []Service
 var latestServicesState []Service // Variável global para armazenar o último estado dos serviços
 var upgrader = websocket.Upgrader{}
 var serverPort string
@@ -73,7 +72,7 @@ func loadConfig(filename string) ([]Service, string, int, error) {
 // Função para verificar o status de um serviço (online ou offline) e calcular o tempo de resposta
 func checkService(description, ip, port string) (string, string) {
 	start := time.Now() // Início do cálculo do tempo de resposta
-	timeout := time.Second * 2
+	timeout := time.Second
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, port), timeout)
 	responseTime := time.Since(start).Milliseconds() // Calcula o tempo de resposta em milissegundos
 
@@ -89,43 +88,28 @@ func checkService(description, ip, port string) (string, string) {
 	return "green", strconv.FormatInt(responseTime, 10) + " ms"
 }
 
-// Função para monitorar os serviços e enviar atualizações apenas quando houver alterações
-func monitorServices(services []Service, conn *websocket.Conn) {
-	// Copia o estado inicial para comparar mais tarde
-	previousServices = make([]Service, len(services))
-	copy(previousServices, services)
-
+func monitorServices(services *[]Service) {
 	for {
-		var changes []Service
-		for i := range services {
-			// Verifica o status atual do serviço e calcula o tempo de resposta
-			currentStatus, responseTime := checkService(services[i].Description, services[i].IP, services[i].Port)
-
-			// Atualiza o status e tempo de resposta apenas se houve mudanças
-			if currentStatus != services[i].Status || responseTime != services[i].ResponseTime {
-				services[i].Status = currentStatus
-				services[i].ResponseTime = responseTime
-				changes = append(changes, services[i])
-			}
-		}
-
-		// Se houver mudanças, envia apenas os serviços que foram alterados
-		if len(changes) > 0 {
-			log.Println("Alterações detectadas, enviando atualizações:", changes)
-
-			// Envia as mudanças para o WebSocket
-			if err := conn.WriteJSON(changes); err != nil {
-				log.Println("Erro ao enviar atualizações:", err)
+		for i := range *services {
+			// Verifica se o arquivo de configuração foi alterado durante a execução
+			if hasConfigFileChanged() {
+				log.Println("Arquivo config.ini modificado, recarregando configurações...")
+				restartServices(services) // Passa o ponteiro de services para a função
 				break
 			}
 
-			// Atualiza o estado anterior com o novo estado
-			copy(previousServices, services)
+			// Verifica o status atual do serviço e calcula o tempo de resposta
+			currentStatus, responseTime := checkService((*services)[i].Description, (*services)[i].IP, (*services)[i].Port)
+
+			// Atualiza o status e tempo de resposta apenas se houver mudanças
+			if currentStatus != (*services)[i].Status || responseTime != (*services)[i].ResponseTime {
+				(*services)[i].Status = currentStatus
+				(*services)[i].ResponseTime = responseTime
+			}
 
 			// Atualiza o último estado dos serviços na variável global
 			mu.Lock()
-			latestServicesState = make([]Service, len(services))
-			copy(latestServicesState, services)
+			latestServicesState[i] = (*services)[i]
 			mu.Unlock()
 		}
 
@@ -134,33 +118,29 @@ func monitorServices(services []Service, conn *websocket.Conn) {
 	}
 }
 
-// Função para monitorar alterações no arquivo config.ini
-func monitorConfigFile() {
-	for {
-		time.Sleep(5 * time.Second) // Verifica a cada 5 segundos
-		info, err := os.Stat(configFile)
-		if err != nil {
-			log.Println("Erro ao verificar arquivo de configuração:", err)
-			continue
-		}
-
-		// Verifica se houve alteração no arquivo
-		modTime := info.ModTime()
-		if modTime.After(lastModTime) {
-			log.Println("Arquivo de configuração alterado. Reiniciando serviços...")
-			restartServices()
-		}
+func hasConfigFileChanged() bool {
+	info, err := os.Stat(configFile)
+	if err != nil {
+		log.Println("Erro ao verificar arquivo de configuração:", err)
+		return false
 	}
+
+	modTime := info.ModTime()
+	if modTime.After(lastModTime) {
+		lastModTime = modTime // Atualiza o tempo de modificação
+		return true           // Retorna verdadeiro se o arquivo foi modificado
+	}
+	return false
 }
 
-// Função para reiniciar os serviços após a alteração no arquivo config.ini
-func restartServices() {
+// / Função para reiniciar os serviços após a alteração no arquivo config.ini
+func restartServices(services *[]Service) {
 	mu.Lock()
 	defer mu.Unlock()
 
 	// Recarregar as configurações
 	var err error
-	services, serverPort, responseTime, err = loadConfig(configFile)
+	*services, serverPort, responseTime, err = loadConfig(configFile)
 	if err != nil {
 		log.Fatalf("Erro ao recarregar arquivo de configuração: %v", err)
 	}
@@ -168,6 +148,9 @@ func restartServices() {
 	// Atualiza o último tempo de modificação
 	info, _ := os.Stat(configFile)
 	lastModTime = info.ModTime()
+
+	latestServicesState = make([]Service, len(*services))
+	copy(latestServicesState, *services)
 
 	log.Println("Configurações recarregadas com sucesso!")
 }
@@ -181,7 +164,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Envia o último estado dos serviços armazenado em memória
+	// Envia o último estado dos serviços armazenado em memória inicialmente
 	mu.Lock()
 	if len(latestServicesState) > 0 {
 		log.Println("Enviando último estado armazenado para o WebSocket:", latestServicesState)
@@ -193,8 +176,30 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	mu.Unlock()
 
-	// Começa a monitorar os serviços e envia atualizações apenas quando houver alterações
-	monitorServices(services, conn)
+	// Continua enviando atualizações periódicas conforme o intervalo definido no config.ini
+	ticker := time.NewTicker(time.Duration(responseTime) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			mu.Lock()
+			// Envia o último estado dos serviços armazenado em memória
+			if len(latestServicesState) > 0 {
+				log.Println("Enviando atualizações periódicas para o WebSocket:", latestServicesState)
+				if err := conn.WriteJSON(latestServicesState); err != nil {
+					log.Println("Erro ao enviar atualizações periódicas:", err)
+					mu.Unlock()
+					return
+				}
+			}
+			mu.Unlock()
+		case <-r.Context().Done():
+			// O WebSocket foi fechado
+			log.Println("Conexão WebSocket fechada.")
+			return
+		}
+	}
 }
 
 // Handler para a página inicial
@@ -223,8 +228,8 @@ func main() {
 	info, _ := os.Stat(configFile)
 	lastModTime = info.ModTime()
 
-	// Iniciar o monitoramento de mudanças no arquivo config.ini em uma goroutine
-	go monitorConfigFile()
+	// Iniciar o monitoramento dos serviços em uma goroutine
+	go monitorServices(&services) // Passa o ponteiro de services para o monitoramento
 
 	// Iniciar o servidor na porta definida no arquivo .ini
 	http.HandleFunc("/ws", wsHandler)
