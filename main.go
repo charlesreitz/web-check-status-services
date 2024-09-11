@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func hasConfigFileChanged() bool {
 	return false
 }
 
-// / Função para reiniciar os serviços após a alteração no arquivo config.ini
+// Função para reiniciar os serviços após a alteração no arquivo config.ini
 func restartServices(services *[]Service) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -212,7 +213,62 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, nil)
 }
 
+// Função para criar um arquivo de log diário
+func setupLog() {
+	currentTime := time.Now().Format("2006-01-02")
+	logDir := "./logs"
+
+	// Verifica se o diretório de logs existe, senão, cria
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		os.Mkdir(logDir, 0755)
+	}
+
+	logFile := filepath.Join(logDir, currentTime+".log")
+	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Redireciona todas as saídas de log para o arquivo
+	log.SetOutput(file)
+
+	// Limpar logs antigos
+	cleanupOldLogs(logDir, 10) // Mantém apenas os últimos 10 dias
+}
+
+// Função para remover logs mais antigos que um certo número de dias
+func cleanupOldLogs(logDir string, maxDays int) {
+	files, err := os.ReadDir(logDir)
+	if err != nil {
+		log.Println("Erro ao ler diretório de logs:", err)
+		return
+	}
+
+	threshold := time.Now().AddDate(0, 0, -maxDays) // Data limite para remoção
+
+	for _, file := range files {
+		filePath := filepath.Join(logDir, file.Name())
+		info, err := os.Stat(filePath)
+		if err != nil {
+			log.Println("Erro ao obter informações do arquivo:", file.Name())
+			continue
+		}
+
+		// Remove arquivos mais antigos que a data limite
+		if info.ModTime().Before(threshold) {
+			if err := os.Remove(filePath); err != nil {
+				log.Println("Erro ao remover arquivo:", file.Name())
+			} else {
+				log.Println("Arquivo removido:", file.Name())
+			}
+		}
+	}
+}
+
 func main() {
+	// Configurar logs diários
+	setupLog()
+
 	// Carregar a configuração inicialmente
 	var err error
 	services, serverPort, responseTime, err = loadConfig(configFile)
