@@ -2,6 +2,7 @@ package main
 
 import (
 	"html/template"
+	"io" // Import adicionado
 	"log"
 	"net"
 	"net/http"
@@ -17,12 +18,12 @@ import (
 )
 
 type Service struct {
-	id           int    // Usar o ID como número da linha
-	Description  string // Descrição do serviço
-	IP           string // IP do serviço
-	Port         string // Porta do serviço
-	Status       string // Status atual do serviço
-	ResponseTime string // Tempo de resposta em milissegundos (string para facilitar exibição no front-end)
+	ID           int    `json:"id"`           // Exportado e incluído no JSON
+	Description  string `json:"Description"`  // Exportado e incluído no JSON
+	IP           string `json:"-"`            // Excluído do JSON
+	Port         string `json:"-"`            // Excluído do JSON
+	Status       string `json:"Status"`       // Exportado e incluído no JSON
+	ResponseTime string `json:"ResponseTime"` // Exportado e incluído no JSON
 }
 
 var services []Service
@@ -33,12 +34,13 @@ var responseTime int          // Variável para armazenar o tempo de resposta
 var mu sync.Mutex             // Mutex para proteger o acesso concorrente à variável latestServicesState
 var configFile = "config.ini" // Nome do arquivo de configuração
 var lastModTime time.Time     // Armazenará a última modificação do arquivo config.ini
+var pathLog string
 
 // Função para carregar o arquivo de configuração e iniciar o monitoramento
-func loadConfig(filename string) ([]Service, string, int, error) {
+func loadConfig(filename string) ([]Service, string, int, string, error) {
 	cfg, err := ini.Load(filename)
 	if err != nil {
-		return nil, "", 0, err
+		return nil, "", 0, "", err
 	}
 
 	// Lendo a porta do servidor
@@ -58,7 +60,7 @@ func loadConfig(filename string) ([]Service, string, int, error) {
 		serviceData := strings.Split(key.Value(), ":")
 		if len(serviceData) == 2 {
 			services = append(services, Service{
-				id:          i + 1, // Atribuindo o número da linha como ID
+				ID:          i + 1, // Atribuindo o número da linha como ID
 				Description: key.Name(),
 				IP:          serviceData[0],
 				Port:        serviceData[1],
@@ -66,8 +68,8 @@ func loadConfig(filename string) ([]Service, string, int, error) {
 			})
 		}
 	}
-
-	return services, port, responseTime, nil
+	pathLog := cfg.Section("general").Key("pathlog").String()
+	return services, port, responseTime, pathLog, nil
 }
 
 // Função para verificar o status de um serviço (online ou offline) e calcular o tempo de resposta
@@ -141,7 +143,7 @@ func restartServices(services *[]Service) {
 
 	// Recarregar as configurações
 	var err error
-	*services, serverPort, responseTime, err = loadConfig(configFile)
+	*services, serverPort, responseTime, pathLog, err = loadConfig(configFile)
 	if err != nil {
 		log.Fatalf("Erro ao recarregar arquivo de configuração: %v", err)
 	}
@@ -168,7 +170,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Envia o último estado dos serviços armazenado em memória inicialmente
 	mu.Lock()
 	if len(latestServicesState) > 0 {
-		log.Println("Enviando último estado armazenado para o WebSocket:", latestServicesState)
+		log.Println("Enviando último estado armazenado para o WebSocket")
 		if err := conn.WriteJSON(latestServicesState); err != nil {
 			log.Println("Erro ao enviar último estado:", err)
 			mu.Unlock()
@@ -187,7 +189,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			// Envia o último estado dos serviços armazenado em memória
 			if len(latestServicesState) > 0 {
-				log.Println("Enviando atualizações periódicas para o WebSocket:", latestServicesState)
+				log.Println("Enviando atualizações periódicas para o WebSocket")
 				if err := conn.WriteJSON(latestServicesState); err != nil {
 					log.Println("Erro ao enviar atualizações periódicas:", err)
 					mu.Unlock()
@@ -213,24 +215,32 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, nil)
 }
 
-// Função para criar um arquivo de log diário
-func setupLog() {
+// Função para criar um arquivo de log diário e também imprimir no console
+func setupLog(pathLog string) {
 	currentTime := time.Now().Format("2006-01-02")
-	logDir := "./logs"
+	logDir := pathLog //"./logs"
 
 	// Verifica se o diretório de logs existe, senão, cria
 	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		os.Mkdir(logDir, 0755)
+		err := os.MkdirAll(logDir, 0755) // Use MkdirAll para criar diretórios pai, se necessário
+		if err != nil {
+			log.Fatalf("Erro ao criar diretório de logs: %v", err)
+		}
 	}
 
 	logFile := filepath.Join(logDir, currentTime+".log")
 	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Erro ao abrir arquivo de log: %v", err)
 	}
 
-	// Redireciona todas as saídas de log para o arquivo
-	log.SetOutput(file)
+	// Cria um MultiWriter para escrever tanto no arquivo quanto no console
+	mw := io.MultiWriter(os.Stdout, file)
+	log.SetOutput(mw)
+
+	// Configura o prefixo e o formato dos logs (opcional, mas recomendado)
+	log.SetPrefix("[" + currentTime + "] ")
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	// Limpar logs antigos
 	cleanupOldLogs(logDir, 10) // Mantém apenas os últimos 10 dias
@@ -266,15 +276,16 @@ func cleanupOldLogs(logDir string, maxDays int) {
 }
 
 func main() {
-	// Configurar logs diários
-	setupLog()
 
 	// Carregar a configuração inicialmente
 	var err error
-	services, serverPort, responseTime, err = loadConfig(configFile)
+	services, serverPort, responseTime, pathLog, err = loadConfig(configFile)
 	if err != nil {
 		log.Fatal("Erro ao carregar arquivo de configuração:", err)
 	}
+
+	// Configurar logs diários
+	setupLog(pathLog)
 
 	// Inicializa o estado mais recente dos serviços em memória
 	latestServicesState = make([]Service, len(services))
