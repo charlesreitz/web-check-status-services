@@ -2,7 +2,7 @@ package main
 
 import (
 	"html/template"
-	"io" // Import adicionado
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,25 +15,26 @@ import (
 
 	"github.com/gorilla/websocket"
 	"gopkg.in/ini.v1"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type Service struct {
-	ID           int    `json:"id"`           // Exportado e incluído no JSON
-	Description  string `json:"Description"`  // Exportado e incluído no JSON
-	IP           string `json:"-"`            // Excluído do JSON
-	Port         string `json:"-"`            // Excluído do JSON
-	Status       string `json:"Status"`       // Exportado e incluído no JSON
-	ResponseTime string `json:"ResponseTime"` // Exportado e incluído no JSON
+	ID           int    `json:"id"`
+	Description  string `json:"Description"`
+	IP           string `json:"-"`
+	Port         string `json:"-"`
+	Status       string `json:"Status"`
+	ResponseTime string `json:"ResponseTime"`
 }
 
 var services []Service
-var latestServicesState []Service // Variável global para armazenar o último estado dos serviços
+var latestServicesState []Service
 var upgrader = websocket.Upgrader{}
 var serverPort string
-var responseTime int          // Variável para armazenar o tempo de resposta
-var mu sync.Mutex             // Mutex para proteger o acesso concorrente à variável latestServicesState
-var configFile = "config.ini" // Nome do arquivo de configuração
-var lastModTime time.Time     // Armazenará a última modificação do arquivo config.ini
+var responseTime int
+var mu sync.Mutex
+var configFile = "config.ini"
+var lastModTime time.Time
 var pathLog string
 
 // Função para carregar o arquivo de configuração e iniciar o monitoramento
@@ -60,11 +61,11 @@ func loadConfig(filename string) ([]Service, string, int, string, error) {
 		serviceData := strings.Split(key.Value(), ":")
 		if len(serviceData) == 2 {
 			services = append(services, Service{
-				ID:          i + 1, // Atribuindo o número da linha como ID
+				ID:          i + 1,
 				Description: key.Name(),
 				IP:          serviceData[0],
 				Port:        serviceData[1],
-				Status:      "unknown", // Status inicial desconhecido
+				Status:      "unknown",
 			})
 		}
 	}
@@ -74,20 +75,19 @@ func loadConfig(filename string) ([]Service, string, int, string, error) {
 
 // Função para verificar o status de um serviço (online ou offline) e calcular o tempo de resposta
 func checkService(description, ip, port string) (string, string) {
-	start := time.Now() // Início do cálculo do tempo de resposta
+	start := time.Now()
 	timeout := time.Second
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, port), timeout)
-	responseTime := time.Since(start).Milliseconds() // Calcula o tempo de resposta em milissegundos
+	responseTime := time.Since(start).Milliseconds()
 
 	if err != nil {
-		// Se houver erro, retornamos "red" como offline e incluímos a descrição do serviço no log
+		// Se houver erro, registramos como offline e incluímos a descrição do serviço no log
 		log.Printf("Erro ao verificar serviço [%s] %s:%s - %v", description, ip, port, err)
 		return "red", strconv.FormatInt(responseTime, 10) + " ms"
 	}
 	defer conn.Close()
 
-	// Retorna "green" se o serviço está online
-	log.Printf("Serviço [%s] %s:%s está online. Tempo de resposta: %d ms", description, ip, port, responseTime)
+	// Não registra serviços online
 	return "green", strconv.FormatInt(responseTime, 10) + " ms"
 }
 
@@ -96,7 +96,6 @@ func monitorServices(services *[]Service) {
 		for i := range *services {
 			// Verifica se o arquivo de configuração foi alterado durante a execução
 			if hasConfigFileChanged() {
-				log.Println("Arquivo config.ini modificado, recarregando configurações...")
 				restartServices(services) // Passa o ponteiro de services para a função
 				break
 			}
@@ -155,7 +154,7 @@ func restartServices(services *[]Service) {
 	latestServicesState = make([]Service, len(*services))
 	copy(latestServicesState, *services)
 
-	log.Println("Configurações recarregadas com sucesso!")
+	// Não registra sucesso na recarga de configurações
 }
 
 // WebSocket handler para enviar dados para o front-end
@@ -170,7 +169,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Envia o último estado dos serviços armazenado em memória inicialmente
 	mu.Lock()
 	if len(latestServicesState) > 0 {
-		log.Println("Enviando último estado armazenado para o WebSocket")
 		if err := conn.WriteJSON(latestServicesState); err != nil {
 			log.Println("Erro ao enviar último estado:", err)
 			mu.Unlock()
@@ -189,7 +187,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			// Envia o último estado dos serviços armazenado em memória
 			if len(latestServicesState) > 0 {
-				log.Println("Enviando atualizações periódicas para o WebSocket")
 				if err := conn.WriteJSON(latestServicesState); err != nil {
 					log.Println("Erro ao enviar atualizações periódicas:", err)
 					mu.Unlock()
@@ -199,7 +196,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 		case <-r.Context().Done():
 			// O WebSocket foi fechado
-			log.Println("Conexão WebSocket fechada.")
 			return
 		}
 	}
@@ -215,64 +211,34 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, nil)
 }
 
-// Função para criar um arquivo de log diário e também imprimir no console
+// Função para configurar o log com rotação a cada 5 MB
 func setupLog(pathLog string) {
-	currentTime := time.Now().Format("2006-01-02")
-	logDir := pathLog //"./logs"
+	logDir := pathLog
 
 	// Verifica se o diretório de logs existe, senão, cria
 	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		err := os.MkdirAll(logDir, 0755) // Use MkdirAll para criar diretórios pai, se necessário
+		err := os.MkdirAll(logDir, 0755)
 		if err != nil {
 			log.Fatalf("Erro ao criar diretório de logs: %v", err)
 		}
 	}
 
-	logFile := filepath.Join(logDir, currentTime+".log")
-	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Erro ao abrir arquivo de log: %v", err)
+	logFile := filepath.Join(logDir, "web-check-status-services.log")
+
+	logger := &lumberjack.Logger{
+		Filename:   logFile,
+		MaxSize:    5,  // Tamanho máximo em megabytes antes de rotacionar
+		MaxBackups: 10, // Número máximo de arquivos de log antigos
+		MaxAge:     0,  // Idade máxima em dias (0 desabilita)
+		Compress:   false,
 	}
 
-	// Cria um MultiWriter para escrever tanto no arquivo quanto no console
-	mw := io.MultiWriter(os.Stdout, file)
+	// Cria um MultiWriter para escrever no arquivo e no console
+	mw := io.MultiWriter(os.Stdout, logger)
 	log.SetOutput(mw)
 
-	// Configura o prefixo e o formato dos logs (opcional, mas recomendado)
-	log.SetPrefix("[" + currentTime + "] ")
+	// Configura o formato dos logs
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-
-	// Limpar logs antigos
-	cleanupOldLogs(logDir, 10) // Mantém apenas os últimos 10 dias
-}
-
-// Função para remover logs mais antigos que um certo número de dias
-func cleanupOldLogs(logDir string, maxDays int) {
-	files, err := os.ReadDir(logDir)
-	if err != nil {
-		log.Println("Erro ao ler diretório de logs:", err)
-		return
-	}
-
-	threshold := time.Now().AddDate(0, 0, -maxDays) // Data limite para remoção
-
-	for _, file := range files {
-		filePath := filepath.Join(logDir, file.Name())
-		info, err := os.Stat(filePath)
-		if err != nil {
-			log.Println("Erro ao obter informações do arquivo:", file.Name())
-			continue
-		}
-
-		// Remove arquivos mais antigos que a data limite
-		if info.ModTime().Before(threshold) {
-			if err := os.Remove(filePath); err != nil {
-				log.Println("Erro ao remover arquivo:", file.Name())
-			} else {
-				log.Println("Arquivo removido:", file.Name())
-			}
-		}
-	}
 }
 
 func main() {
@@ -284,7 +250,7 @@ func main() {
 		log.Fatal("Erro ao carregar arquivo de configuração:", err)
 	}
 
-	// Configurar logs diários
+	// Configurar logs com rotação a cada 5 MB
 	setupLog(pathLog)
 
 	// Inicializa o estado mais recente dos serviços em memória
@@ -301,6 +267,5 @@ func main() {
 	// Iniciar o servidor na porta definida no arquivo .ini
 	http.HandleFunc("/ws", wsHandler)
 	http.HandleFunc("/", indexHandler)
-	log.Printf("Servidor iniciado na porta :%s\n", serverPort)
 	log.Fatal(http.ListenAndServe(":"+serverPort, nil))
 }
